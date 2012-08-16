@@ -176,8 +176,8 @@ module Control.Distributed.Process.Closure
   , cpSend
   , cpExpect
   , cpNewChan
+#ifdef TemplateHaskellSupport 
     -- * Template Haskell support for creating static values and closures 
-#ifdef TH
   , remotable
   , mkStatic
   , mkClosure
@@ -207,7 +207,7 @@ import Control.Distributed.Process.Internal.Closure.BuiltIn
   , cpExpect
   , cpNewChan
   )
-#ifdef TH
+#ifdef TemplateHaskellSupport 
 import Control.Distributed.Process.Internal.Closure.TH 
   ( remotable
   , mkStatic

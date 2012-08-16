@@ -52,7 +52,7 @@ import Control.Distributed.Static
   , registerStatic
   , Static
   , staticLabel
-  , Closure(Closure)
+  , closure
   , staticCompose
   )
 import Control.Distributed.Process.Internal.Types (Process)
@@ -97,7 +97,7 @@ functionTDict = varE . tdictName
 
 mkClosure :: Name -> Q Exp
 mkClosure n = 
-  [|   Closure ($(mkStatic n) `staticCompose` staticDecode $(functionSDict n)) 
+  [|   closure ($(mkStatic n) `staticCompose` staticDecode $(functionSDict n)) 
      . encode
   |]
 

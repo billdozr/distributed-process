@@ -3,13 +3,14 @@ module Control.Distributed.Process.Internal.Node
     sendPayload
   , sendBinary
   , sendMessage
+  , reconnect
   ) where
 
 import Data.Accessor ((^.), (^=))
 import Data.Binary (Binary, encode)
 import qualified Data.ByteString.Lazy as BSL (toChunks)
 import qualified Data.ByteString as BSS (ByteString)
-import Control.Concurrent.MVar (withMVar, modifyMVar_)
+import Control.Distributed.Process.Internal.StrictMVar (withMVar, modifyMVar_)
 import Control.Concurrent.Chan (writeChan)
 import Control.Monad (unless)
 import qualified Network.Transport as NT 
@@ -18,6 +19,7 @@ import qualified Network.Transport as NT
   , defaultConnectHints
   , connect
   , Reliability(ReliableOrdered)
+  , close
   )
 import Control.Distributed.Process.Internal.Types 
   ( LocalNode(localState, localEndPoint, localCtrlChan)
@@ -44,8 +46,8 @@ sendPayload node from to payload = do
     Just conn -> do
       didSend <- NT.send conn payload
       case didSend of
-        Left _  -> return False
-        Right _ -> return True 
+        Left _err -> return False 
+        Right ()  -> return True 
     Nothing -> return False
   unless didSend $
     writeChan (localCtrlChan node) NCMsg
@@ -89,3 +91,13 @@ connBetween node from to = do
       Nothing   -> setupConnBetween node from to 
   where
     nodeState = localState node
+
+reconnect :: LocalNode -> Identifier -> Identifier -> IO ()
+reconnect node from to =
+  modifyMVar_ (localState node) $ \st -> 
+    case st ^. localConnectionBetween from to of
+      Nothing -> 
+        return st
+      Just conn -> do
+        NT.close conn 
+        return (localConnectionBetween from to ^= Nothing $ st)

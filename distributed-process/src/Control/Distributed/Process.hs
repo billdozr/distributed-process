@@ -63,7 +63,8 @@ module Control.Distributed.Process
   , PortMonitorNotification(..)
   , DiedReason(..)
     -- * Closures
-  , Closure(..)
+  , Closure
+  , closure
   , Static
   , unClosure
   , RemoteTable
@@ -98,6 +99,10 @@ module Control.Distributed.Process
     -- * Local versions of 'spawn' 
   , spawnLocal
   , spawnChannelLocal
+    -- * Reconnecting
+  , reconnect
+  , reconnectNode
+  , reconnectPort
   ) where
 
 #if ! MIN_VERSION_base(4,6,0)
@@ -109,7 +114,8 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Applicative ((<$>))
 import Control.Monad.Reader (ask)
 import Control.Distributed.Static 
-  ( Closure(..)
+  ( Closure
+  , closure
   , Static
   , RemoteTable
   )
@@ -206,6 +212,10 @@ import Control.Distributed.Process.Internal.Primitives
     -- Auxiliary API
   , expectTimeout
   , spawnAsync
+    -- Reconnecting
+  , reconnect
+  , reconnectNode
+  , reconnectPort
   )
 import Control.Distributed.Process.Serializable (Serializable)
 import Control.Distributed.Process.Node (forkProcess)
@@ -294,14 +304,14 @@ spawn nid proc = do
                    `seqCP` proc
   mPid <- receiveWait 
     [ matchIf (\(DidSpawn ref _) -> ref == sRef)
-              (\(DidSpawn _ pid) -> return $ Just pid)
+              (\(DidSpawn _ pid) -> return $ Right pid)
     , matchIf (\(NodeMonitorNotification ref _ _) -> ref == mRef)
-              (\_ -> return Nothing)
+              (\(NodeMonitorNotification _ _ err) -> return $ Left err)
     ]
   unmonitor mRef
   case mPid of
-    Nothing  -> fail "spawn: remote node failed"
-    Just pid -> send pid () >> return pid
+    Left err  -> fail $ "spawn: remote node failed: " ++ show err
+    Right pid -> send pid () >> return pid
 
 -- | Spawn a process and link to it
 --
@@ -333,7 +343,7 @@ spawnMonitor nid proc = do
 call :: Serializable a => Static (SerializableDict a) -> NodeId -> Closure (Process a) -> Process a
 call dict nid proc = do 
   us <- getSelfPid
-  (_, mRef) <- spawnMonitor nid (proc `bindCP` cpSend dict us)
+  (pid, mRef) <- spawnMonitor nid (proc `bindCP` cpSend dict us)
   -- We are guaranteed to receive the reply before the monitor notification
   -- (if a reply is sent at all)
   -- NOTE: This might not be true if we switch to unreliable delivery.
@@ -343,8 +353,17 @@ call dict nid proc = do
               (\(ProcessMonitorNotification _ _ reason) -> return (Left reason))
     ]
   case mResult of
-    Right a  -> unmonitor mRef >> return a
-    Left err -> fail $ "call: remote process died: " ++ show err 
+    Right a  -> do
+      -- Wait for the monitor message so that we the mailbox doesn't grow 
+      receiveWait 
+        [ matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
+                  (\(ProcessMonitorNotification {}) -> return ())
+        ]
+      -- Clean up connection to pid
+      reconnect pid
+      return a
+    Left err -> 
+      fail $ "call: remote process died: " ++ show err 
 
 -- | Spawn a child process, have the child link to the parent and the parent
 -- monitor the child
